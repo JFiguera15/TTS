@@ -1,30 +1,38 @@
 import cv2
 import numpy as np
-from PIL import  ImageGrab
+from PIL import  ImageGrab, Image
 import pyautogui
 import time
 from pytesseract import pytesseract
 from pytesseract import Output
-import pyttsx3
 import PySimpleGUI as sg
 import keyboard
-import uberduck
+import datetime
+import os.path
+from wordcloud import WordCloud, STOPWORDS, ImageColorGenerator
+import matplotlib.pyplot as plt
+import sqlite3
+from tkinter import filedialog as fd
 import random
 from configparser import ConfigParser
 import re
+from collections import Counter
+import playsound
+from gtts import gTTS
+from difflib import SequenceMatcher
+from mutagen.mp3 import MP3
 
 #Reading the configuration in config.ini
 config = ConfigParser()
 config.read('config.ini')
 
 #Updating configuration based on config.ini
-client = uberduck.UberDuck(config['options']['api_key'], config['options']['secret_key'])
-uberduck_voices= []
 path_tesseract=config['options']['path']
 confidence = int(float(config['options']['confidence']))
 delay = int(config['options']['delay'])
-default_tts_voices= ["Male", "Female", "Random"]
-tts_engines = ["Default TTS", "Uberduck"]
+default_tts_voices= ["English (US)", "English (UK)", "Spanish (Mexico)", "Spanish (Spain)", 
+                     "French (France)", "French (Canada)", "Portuguese (Brazil)", "Portuguese (Portugal)"]
+speeds = ["Normal", "Slow"]
 
 
 def read_image(x1, y1,x2, y2):
@@ -45,6 +53,7 @@ def read_image(x1, y1,x2, y2):
     for i in range(len(data['text'])):
         if float(data['conf'][i] > int(float(config['options']['confidence']))):
             text +=  data['text'][i] + " "
+
     img = cv2.imencode('.png', cap_arr)[1].tobytes()
     return text, img
 
@@ -61,20 +70,87 @@ def removeCommonWords(sent1,sent2):
     if i  not in sent1:
       sentence += i
       sentence += " "
-  return sentence  
+  return sentence
 
-
-def speak_uberduck(text, voices):
-    """Reads a text with the specified voices utilizing the uberduck API.
-    Arguments:
-    text: Text to be read.
-    voices: List of potential voices that will be used in the audio.
+def speak(text, voice, speed, pause):
     """
-    voice = random.choice(voices[0])
-    client.speak(text, voice, play_sound=True)
+    Converts the input text to speech and plays it.
+
+    Args:
+        text (str): The text to be spoken.
+    """
+    lang, tld = '', ''
+    slow = False
+    stop = False
+    if speed == "Slow":
+        slow = True
+    if pause == "Yes":
+        stop = True
+
+    if voice == 1:
+        lang = 'en'
+        tld = 'us'
+    elif voice == 2:
+        lang = 'en'
+        tld = 'co.uk'
+    elif voice == 3:
+        lang = 'es'
+        tld = 'com.mx'
+    elif voice == 4:
+        lang = 'es'
+        tld = 'es'
+    elif voice == 5:
+        lang = 'fr'
+        tld = 'fr'
+    elif voice == 6:
+        lang = 'fr'
+        tld = 'ca'
+    elif voice == 7:
+        lang = 'pt'
+        tld = 'com.br'
+    elif voice == 8:
+        lang = 'pt'
+        tld = 'pt'
+    if (text != '' and text != ' '):
+        tts = gTTS(text=text, lang=lang, tld=tld, slow=slow)
+        filename = ''.join(random.choices('0123456789', k=5))
+        filename = filename + '.mp3'
+        tts.save(filename)
+        playsound.playsound(filename, stop) 
+        os.remove(filename) 
+
+def date():
+    time = datetime.date.today()
+    return time.strftime("%d/%m/%Y")
+
+def save_words(text, connection):
+    cursor = connection.cursor()
+    text = re.sub(r'\W+', ' ', text)
+    words = text.split()
+    for word in words:
+        cursor.execute("INSERT INTO words values (?, ?)", [word, date()])
+
+    connection.commit()
+
+def get_most_repeated(connection):
+    results = []
+    cursor = connection.cursor()
+    cursor.execute("select words from words")
+    for row in cursor:
+        results.append(row[0])
+    if(len(results) > 0):
+        dictionary = dict(Counter(results).most_common())
+        wc = WordCloud().generate_from_frequencies(dictionary)
+        wc.to_file('cloud.png')
+    else:
+        img = Image.new('RGB', (400, 200), color = (0,0,0))
+        img.save('cloud.png')
+
+    return Counter(results).most_common()
+    
 
 
-def apply_options(path, confidence, delay, speed, volume, voice, api_key, secret_key, stop_key):
+def apply_options(path, confidence, delay, speed, voice, pause, stop_key):
     """Apply options set in the program onto the config.ini file.
     Arguments:
     All the keys defined in config.ini
@@ -84,48 +160,18 @@ def apply_options(path, confidence, delay, speed, volume, voice, api_key, secret
     speed: (Default TTS only) Speed in Words-Per-Minute that the engine will read the text.
     volume: (Default TTS only) Volume in percentage that the audio will be played at.
     voice: (Default TTS only) Which voice the TTS engine will use for playing the audio.
-    api_key: Uberduck API key.
-    secret_key: Uberduck API secret key.
     stop_key: Keyboard key used to stop the program from continuing. 
     """
     config['options']['path'] = path
     config['options']['confidence'] = str(confidence)
     config['options']['delay']  = str(delay)
     config['options']['speed'] = str(speed)
-    config['options']['volume'] = str(volume)
+    config['options']['pause'] = str(pause)
     config['options']['voice']  = str(default_tts_voices.index(voice) + 1)
-    config['options']['api_key'] = api_key
-    config['options']['secret_key'] = secret_key
     config['options']['stop_key'] = stop_key
 
     with open('config.ini', 'w') as configfile:
         config.write(configfile)
-
-
-def speak_default(text, volume, speed, voice):
-    """Read a text with the default Windows TTS engine.
-    volume:Volume in percentage that the audio will be played at.
-    speed:Speed in Words-Per-Minute that the engine will read the text.
-    voice:Which voice the TTS engine will use for playing the audio.
-    """
-    engine = pyttsx3.init()
-    voices = engine.getProperty('voices')
-    if voice != 2:
-        engine.setProperty('voice', voices[voice].id)
-    else:
-         engine.setProperty('voice', voices[random.choice([0,1])].id)
-    engine.setProperty('rate', speed)
-    engine.setProperty('volume', volume/100)
-    engine.say(text)
-    engine.runAndWait()
-
-
-def get_uberduck_voice_list():
-    """Get the voices written in voices.txt"""
-    with open('voices.txt') as f:
-        voices = f.read().splitlines()
-    return voices
-
 
 def main_window():
     """Create the pysimpleGUI main window's layout."""
@@ -133,7 +179,7 @@ def main_window():
     tab1 = [[sg.Image(filename='', key='image')],
             [sg.Text("Detected Text:", key='detected')],
             [sg.Text("Status:", key='status')],
-              [sg.Button('Start'), sg.Button('Stop'), sg.Combo(tts_engines, readonly=True, default_value="Default TTS", key='tts_type')]]
+              [sg.Button('Start'), sg.Button('Stop')]]
     tab2 = [[sg.Text("Tesseract path:")],
             [sg.Input(default_text=path_tesseract, key='path', 
                       tooltip="The path where the tesseract.exe is located.", readonly=True), sg.FileBrowse()],
@@ -142,35 +188,32 @@ def main_window():
                        tooltip="The higher the number, the more strict it will be with the data it picks up.\nLower numbers can lead to more misreadings.")],
             [sg.Text("Key to stop program:")],
             [sg.InputText(config['options']['stop_key'], key='stop_key', readonly=True), sg.Button("Change")],
-            [sg.Text("Default TTS Options:")],
             [sg.Text("Delay:")],
             [sg.Input(default_text=delay, key='delay', 
                       tooltip="Defines how long the program pauses in seconds after reading.\nUseful for text with transitions.")],
             [sg.Text("Speed:")],
-            [sg.Spin([i for i in range(1,400)], initial_value=config['options']['speed'], key='speed', 
+            [sg.Combo(speeds, readonly=True, default_value=config['options']['speed'], key='speed', 
                      tooltip="The rate in words per minute for the TTS to speak in.")],
-            [sg.Text("Volume:")],
-            [sg.Slider(range=(0,100), default_value=int(float(config['options']['volume'])), orientation='horizontal', key='volume')],
+            [sg.Text("Pause program when reading:")],
+            [sg.Combo(["Yes", "No"], readonly=True, default_value=config['options']['pause'], key='pause', 
+                     tooltip="The rate in words per minute for the TTS to speak in.")],
             [sg.Text("Voice:")],
             [sg.Combo(default_tts_voices, readonly=True, default_value=default_tts_voices[int(float(config['options']['voice'])) - 1], key='default_voice')],
-            [sg.Text("Uberduck Options:")],
-            [sg.Text("API key:")],
-            [sg.InputText(password_char='*', default_text=config['options']['api_key'], key='api_key')],
-            [sg.Text("Secret key:")],
-            [sg.InputText(password_char='*', default_text=config['options']['secret_key'], key='secret_key')],
-            [sg.Text("Voices:")],
-            [sg.Listbox(get_uberduck_voice_list(), size=(15,3), key='voice_list', select_mode='multiple',
-                        tooltip="List of voices obtained from voices.txt, if you wish to add more, add them to that file.\nIf you select multiple, the program will pick one at random for every utterance.")],
-            [sg.HorizontalSeparator()],
             [sg.Button("Test"),sg.Button("Apply")]]
+    tab3 = [[sg.Text("Most common words:")],
+            [sg.Image(filename='cloud.png', key='wordcloud')],
+            [sg.Table(key='table', headings=["Word", "Times read"], values=get_most_repeated(connection), size=(1, 5), auto_size_columns=False)],
+            [sg.Button("Clear data")]]
     
-    layout = [[sg.TabGroup([[sg.Tab('Main', tab1), sg.Tab('Options', tab2)]], key='tabgroup')]]
+    layout = [[sg.TabGroup([[sg.Tab('Main', tab1), sg.Tab('Options', tab2), sg.Tab('Data', tab3)]], key='tabgroup')]]
     
     return sg.Window("Reader", layout, finalize=True, resizable=True)
 
 
 if __name__ == '__main__':
     """Main method."""
+    connection = sqlite3.connect('data.db')
+    repeated_words = get_most_repeated(connection)
     window = main_window()
     recording = True
     x1, x2, y1, y2 = 0,0,0,0
@@ -192,29 +235,33 @@ if __name__ == '__main__':
                 #Stops the screen reading functions.
                 sg.popup("Program Stopped")
                 recording = False
+                get_most_repeated(connection)
+                window.refresh()
             elif event == 'Apply':
                 #Applies the options onto the config.ini file.
                 apply_options(values['path'], values['confidence'], 
                               values['delay'], values['speed'], 
-                              values['volume'], values['default_voice'],
-                              values['api_key'], values['secret_key'], values['stop_key'])
-                uberduck_voices.clear()
-                uberduck_voices.append(values['voice_list'])
+                              values['default_voice'], values['pause'],
+                              values['stop_key'])
                 sg.popup("Succesfully Applied")
             elif event == 'Test':
                 #Tests both TTS engines.
-                speak_default('This is the default TTS', int(float(config['options']['volume'])),
-                              int(float(config['options']['speed'])), int(config['options']['voice']) - 1)
-                if values['api_key'] != ' ' or values['secret_key'] != ' ':
-                    speak_uberduck('This is the uberduck Tee Tee Ess', uberduck_voices)
-                else:
-                    sg.popup("No uberduck keys detected")
+                speak("This is a test", int(config['options']['voice']), config['options']['speed'])
+                #speak_default('This is the default TTS', int(float(config['options']['volume'])),
+                      #        int(float(config['options']['speed'])), int(config['options']['voice']) - 1)
             elif event == 'Change':
                 #Changes the key that will be used for stopping the program.
                 window['stop_key'].update("Waiting for key...")
                 window.refresh()
                 k = keyboard.read_key()
                 window['stop_key'].update(k)
+            elif event == 'Clear data':
+                if(sg.popup_yes_no("Are you sure you want to delete the data?", title="Delete data") == 'Yes'):
+                    cursor = connection.cursor()
+                    cursor.execute("delete from words")
+                    connection.commit()
+                    get_most_repeated(connection)
+                    window.refresh()
         except Exception as ex:
             #Displays catched exception.
             sg.PopupError(ex)
@@ -227,25 +274,23 @@ if __name__ == '__main__':
             #Logic behind reading the screen and detecting/speaking the text.
             txt, img = read_image(x1, y1, x2, y2)
             txt = txt.strip()
-            txt = re.sub(r'[^0-9A-Za-z ,.\'-]+', '', txt)
+            txt = re.sub(r'[|-]+', 'I', txt)
+            txt = re.sub(r'[^0-9A-Za-z ,.!?ñáéíóúÁÉÍÓÚâêîôÂÊÎÔãõÃÕçÇ:\'-]+', '', txt)
             window['image'].update(data=img)
             window.refresh()
-            if txt != ' ' and txt != '' and txt != old_txt:
+            if txt != ' ' and txt != '' and txt != old_txt and SequenceMatcher(None, txt, old_txt).ratio() < 0.7:
                 if old_txt != '' and txt.__contains__(old_txt):
                     txt = removeCommonWords(old_txt, txt).strip()
-                window['detected'].update(txt)
+                printed_txt = ''
+                for i, letter in enumerate(txt):
+                    if i % 50 == 0:
+                        printed_txt += '\n'
+                    printed_txt += letter
+                window['detected'].update(printed_txt)
                 window['status'].update('Status: Processing...')
                 window.refresh()
-                if values['tts_type'] == 'Default TTS':
-                    speak_default(txt, int(float(config['options']['volume'])), 
-                                  int(float(config['options']['speed'])), int(config['options']['voice']) - 1)
-                    window['status'].update('Status: Processed.')
-                else:
-                    try:
-                        speak_uberduck(txt, uberduck_voices)
-                        window['status'].update('Status: Processed.')
-                    except Exception as ex:
-                        sg.popup_error(ex)
-                        recording = False
+                speak(txt, int(config['options']['voice']), config['options']['speed'], config['options']['pause'])
+                save_words(txt, connection)
+                window['status'].update('Status: Processed.')
                 old_txt = txt.strip()
             time.sleep(int(config['options']['delay']))
