@@ -5,13 +5,9 @@ import pyautogui
 import time
 from pytesseract import pytesseract
 from pytesseract import Output
-import PySimpleGUI as sg
+import FreeSimpleGUI as sg
 import keyboard
-import datetime
 import os.path
-from wordcloud import WordCloud, STOPWORDS, ImageColorGenerator
-import matplotlib.pyplot as plt
-import sqlite3
 from tkinter import filedialog as fd
 import random
 from configparser import ConfigParser
@@ -119,36 +115,6 @@ def speak(text, voice, speed, pause):
         playsound.playsound(filename, stop) 
         os.remove(filename) 
 
-def date():
-    time = datetime.date.today()
-    return time.strftime("%d/%m/%Y")
-
-def save_words(text, connection):
-    cursor = connection.cursor()
-    text = re.sub(r'\W+', ' ', text)
-    words = text.split()
-    for word in words:
-        cursor.execute("INSERT INTO words values (?, ?)", [word, date()])
-
-    connection.commit()
-
-def get_most_repeated(connection):
-    results = []
-    cursor = connection.cursor()
-    cursor.execute("select words from words")
-    for row in cursor:
-        results.append(row[0])
-    if(len(results) > 0):
-        dictionary = dict(Counter(results).most_common())
-        wc = WordCloud().generate_from_frequencies(dictionary)
-        wc.to_file('cloud.png')
-    else:
-        img = Image.new('RGB', (400, 200), color = (0,0,0))
-        img.save('cloud.png')
-
-    return Counter(results).most_common()
-    
-
 
 def apply_options(path, confidence, delay, speed, voice, pause, stop_key):
     """Apply options set in the program onto the config.ini file.
@@ -200,20 +166,14 @@ def main_window():
             [sg.Text("Voice:")],
             [sg.Combo(default_tts_voices, readonly=True, default_value=default_tts_voices[int(float(config['options']['voice'])) - 1], key='default_voice')],
             [sg.Button("Test"),sg.Button("Apply")]]
-    tab3 = [[sg.Text("Most common words:")],
-            [sg.Image(filename='cloud.png', key='wordcloud')],
-            [sg.Table(key='table', headings=["Word", "Times read"], values=get_most_repeated(connection), size=(1, 5), auto_size_columns=False)],
-            [sg.Button("Clear data")]]
     
-    layout = [[sg.TabGroup([[sg.Tab('Main', tab1), sg.Tab('Options', tab2), sg.Tab('Data', tab3)]], key='tabgroup')]]
+    layout = [[sg.TabGroup([[sg.Tab('Main', tab1), sg.Tab('Options', tab2)]], key='tabgroup')]]
     
     return sg.Window("Reader", layout, finalize=True, resizable=True)
 
 
 if __name__ == '__main__':
     """Main method."""
-    connection = sqlite3.connect('data.db')
-    repeated_words = get_most_repeated(connection)
     window = main_window()
     recording = True
     x1, x2, y1, y2 = 0,0,0,0
@@ -235,7 +195,6 @@ if __name__ == '__main__':
                 #Stops the screen reading functions.
                 sg.popup("Program Stopped")
                 recording = False
-                get_most_repeated(connection)
                 window.refresh()
             elif event == 'Apply':
                 #Applies the options onto the config.ini file.
@@ -246,7 +205,7 @@ if __name__ == '__main__':
                 sg.popup("Succesfully Applied")
             elif event == 'Test':
                 #Tests both TTS engines.
-                speak("This is a test", int(config['options']['voice']), config['options']['speed'])
+                speak("This is a test", int(config['options']['voice']), config['options']['speed'], config['options']['pause'])
                 #speak_default('This is the default TTS', int(float(config['options']['volume'])),
                       #        int(float(config['options']['speed'])), int(config['options']['voice']) - 1)
             elif event == 'Change':
@@ -255,13 +214,6 @@ if __name__ == '__main__':
                 window.refresh()
                 k = keyboard.read_key()
                 window['stop_key'].update(k)
-            elif event == 'Clear data':
-                if(sg.popup_yes_no("Are you sure you want to delete the data?", title="Delete data") == 'Yes'):
-                    cursor = connection.cursor()
-                    cursor.execute("delete from words")
-                    connection.commit()
-                    get_most_repeated(connection)
-                    window.refresh()
         except Exception as ex:
             #Displays catched exception.
             sg.PopupError(ex)
@@ -290,7 +242,6 @@ if __name__ == '__main__':
                 window['status'].update('Status: Processing...')
                 window.refresh()
                 speak(txt, int(config['options']['voice']), config['options']['speed'], config['options']['pause'])
-                save_words(txt, connection)
                 window['status'].update('Status: Processed.')
                 old_txt = txt.strip()
             time.sleep(int(config['options']['delay']))
