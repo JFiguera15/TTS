@@ -1,0 +1,6 @@
+*.mp3
+*.png
+*.spec
+./venv
+./build
+./dist
